@@ -25,12 +25,12 @@ export class DualHandGestureMachine {
   }
 
   update(
-    pointingHand: { present: boolean; x: number; y: number } | null,
+    pointingHand: { present: boolean; x: number; y: number; isFist: boolean } | null,
     conductingHand: { present: boolean; x: number; y: number; isPinching: boolean; isFist: boolean; velocity: number } | null
   ): void {
     const prevState = { ...this.state };
 
-    // Update pointing hand (left hand - controls section selection)
+    // Update pointing hand (left hand - controls section selection and stopping)
     if (pointingHand) {
       this.state.pointingHand = {
         present: pointingHand.present,
@@ -38,8 +38,20 @@ export class DualHandGestureMachine {
         y: pointingHand.y,
         section: pointingHand.present ? getSectionFromX(pointingHand.x) : null,
       };
+
+      // Detect fist gesture for stopping on LEFT hand
+      if (pointingHand.isFist && !this.wasFist) {
+        this.onFist?.(true);
+      } else if (!pointingHand.isFist && this.wasFist) {
+        this.onFist?.(false);
+      }
+      this.wasFist = pointingHand.isFist;
     } else {
       this.state.pointingHand = { present: false, x: 0.5, y: 0.5, section: null };
+      if (this.wasFist) {
+        this.onFist?.(false);
+        this.wasFist = false;
+      }
     }
 
     // Update conducting hand (right hand - controls playback)
@@ -53,20 +65,12 @@ export class DualHandGestureMachine {
         velocity: conductingHand.velocity,
       };
 
-      // Detect fist gesture
-      if (conductingHand.isFist && !this.wasFist) {
-        this.onFist?.(true);
-      } else if (!conductingHand.isFist && this.wasFist) {
-        this.onFist?.(false);
-      }
-
       // Detect pinch for downbeat
       if (conductingHand.isPinching && !this.wasPinching) {
         this.onDownbeat?.();
       }
 
       this.wasPinching = conductingHand.isPinching;
-      this.wasFist = conductingHand.isFist;
     } else {
       this.state.conductingHand = { present: false, x: 0.5, y: 0.5, isPinching: false, isFist: false, velocity: 0 };
     }

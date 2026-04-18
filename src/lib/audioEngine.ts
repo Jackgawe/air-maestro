@@ -26,6 +26,8 @@ const SECTION_RANGES: Record<Section, { min: number; max: number; base: number }
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
+  private reverbNode: GainNode | null = null;
+  private compressor: DynamicsCompressorNode | null = null;
   private sectionGains: Map<Section, GainNode> = new Map();
 
   async initialize(): Promise<void> {
@@ -34,17 +36,69 @@ export class AudioEngine {
     }
 
     this.ctx = new AudioContext();
+    
+    // Master chain
+    this.compressor = this.ctx.createDynamicsCompressor();
+    this.compressor.threshold.setValueAtTime(-24, this.ctx.currentTime);
+    this.compressor.knee.setValueAtTime(40, this.ctx.currentTime);
+    this.compressor.ratio.setValueAtTime(12, this.ctx.currentTime);
+    this.compressor.attack.setValueAtTime(0, this.ctx.currentTime);
+    this.compressor.release.setValueAtTime(0.25, this.ctx.currentTime);
+    
     this.masterGain = this.ctx.createGain();
-    this.masterGain.gain.value = 0.5;
+    this.masterGain.gain.value = 0.6;
+    
+    // Simple algorithmic reverb
+    this.reverbNode = await this.createReverb();
+    
+    // Connect chain: Sections -> Reverb -> Compressor -> Master -> Destination
+    this.reverbNode.connect(this.compressor);
+    this.compressor.connect(this.masterGain);
     this.masterGain.connect(this.ctx.destination);
 
     const sections: Section[] = ['strings', 'brass', 'winds', 'percussion'];
     sections.forEach((section) => {
       const gain = this.ctx!.createGain();
       gain.gain.value = 1;
-      gain.connect(this.masterGain!);
+      gain.connect(this.reverbNode!);
       this.sectionGains.set(section, gain);
     });
+  }
+
+  private async createReverb(): Promise<GainNode> {
+    if (!this.ctx) throw new Error('AudioContext not initialized');
+    
+    const input = this.ctx.createGain();
+    const dry = this.ctx.createGain();
+    const wet = this.ctx.createGain();
+    
+    dry.gain.value = 0.8;
+    wet.gain.value = 0.4;
+    
+    // Create a very simple "space" using a short delay with feedback
+    // In a real app, we'd use a ConvolverNode with an impulse response
+    const delay = this.ctx.createDelay();
+    delay.delayTime.value = 0.05;
+    
+    const feedback = this.ctx.createGain();
+    feedback.gain.value = 0.4;
+    
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 2000;
+    
+    input.connect(dry);
+    input.connect(delay);
+    delay.connect(filter);
+    filter.connect(feedback);
+    feedback.connect(delay);
+    feedback.connect(wet);
+    
+    const output = this.ctx.createGain();
+    dry.connect(output);
+    wet.connect(output);
+    
+    return output;
   }
 
   resume(): void {
@@ -66,11 +120,22 @@ export class AudioEngine {
     osc2.type = 'sawtooth';
     osc2.frequency.value = freq * 1.003; // Slight detune
     
+    // Add subtle LFO for vibrato
+    const vibrato = this.ctx.createOscillator();
+    vibrato.type = 'sine';
+    vibrato.frequency.value = 5.5; // 5.5Hz vibrato
+    const vibratoGain = this.ctx.createGain();
+    vibratoGain.gain.value = 2.0; // depth in Hz
+    vibrato.connect(vibratoGain);
+    vibratoGain.connect(osc.frequency);
+    vibratoGain.connect(osc2.frequency);
+    vibrato.start(time);
+    
     // Lowpass filter to soften the sawtooth
     const filter = this.ctx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.value = 3000;
-    filter.Q.value = 1;
+    filter.frequency.value = 2500;
+    filter.Q.value = 0.5;
     
     // Connect full graph to destination
     osc.connect(filter);
@@ -80,7 +145,7 @@ export class AudioEngine {
     osc.start(time);
     osc2.start(time);
     
-    return [osc, osc2];
+    return [osc, osc2, vibrato];
   }
 
   private createBrassTone(freq: number, time: number, dest: AudioNode): OscillatorNode[] {
@@ -88,7 +153,7 @@ export class AudioEngine {
     
     // Brass: Square wave with pulse width modulation effect
     const osc = this.ctx.createOscillator();
-    osc.type = 'square';
+    osc.type = 'sawtooth';
     osc.frequency.value = freq;
     
     // Add second oscillator an octave lower for body
@@ -96,11 +161,12 @@ export class AudioEngine {
     osc2.type = 'sawtooth';
     osc2.frequency.value = freq * 0.5;
     
-    // Bandpass filter for brass character
+    // Filter sweep for brass "blat"
     const filter = this.ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.value = freq * 2;
-    filter.Q.value = 2;
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(freq * 0.5, time);
+    filter.frequency.exponentialRampToValueAtTime(freq * 4, time + 0.1);
+    filter.Q.value = 4;
     
     // Connect full graph to destination
     osc.connect(filter);
@@ -118,32 +184,51 @@ export class AudioEngine {
     
     // Winds: Sine with subtle harmonics
     const osc = this.ctx.createOscillator();
-    osc.type = 'sine';
+    osc.type = 'triangle';
     osc.frequency.value = freq;
     
-    // Add subtle triangle for woodwind character
-    const osc2 = this.ctx.createOscillator();
-    osc2.type = 'triangle';
-    osc2.frequency.value = freq;
-    const harmonicsGain = this.ctx.createGain();
-    harmonicsGain.gain.value = 0.3;
+    // Vibrato for woodwinds
+    const vibrato = this.ctx.createOscillator();
+    vibrato.type = 'sine';
+    vibrato.frequency.value = 6.0;
+    const vibratoGain = this.ctx.createGain();
+    vibratoGain.gain.value = 3.0;
+    vibrato.connect(vibratoGain);
+    vibratoGain.connect(osc.frequency);
+    vibrato.start(time);
+    
+    // Add subtle white noise for breathiness
+    const bufferSize = this.ctx.sampleRate * 0.5;
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * 0.05;
+    }
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = buffer;
+    noise.loop = true;
+    
+    const noiseFilter = this.ctx.createBiquadFilter();
+    noiseFilter.type = 'bandpass';
+    noiseFilter.frequency.value = 2000;
+    noiseFilter.Q.value = 1.0;
+    
+    noise.connect(noiseFilter);
+    noiseFilter.connect(dest);
+    noise.start(time);
     
     // Lowpass for breathy quality
     const filter = this.ctx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.value = 2000;
+    filter.frequency.value = 3000;
     filter.Q.value = 0.5;
     
-    // Connect full graph to destination
     osc.connect(filter);
-    osc2.connect(harmonicsGain);
-    harmonicsGain.connect(filter);
     filter.connect(dest);
     
     osc.start(time);
-    osc2.start(time);
     
-    return [osc, osc2];
+    return [osc, vibrato, (noise as unknown as OscillatorNode)];
   }
 
   private createPercussionTone(freq: number, time: number, dest: AudioNode): { oscillators: OscillatorNode[]; noise: AudioBufferSourceNode | null } {

@@ -116,11 +116,6 @@ export class Sequencer {
       this.currentIndex = 0;
       this.loopCount++;
       
-      // Speed up slightly each loop (cap at max BPM)
-      const speedupFactor = Math.min(1.3, 1 + this.loopCount * 0.1);
-      const newBpm = Math.min(200, 120 * speedupFactor);
-      this.setBpm(newBpm);
-      
       this.options.onLoopComplete?.(this.loopCount);
     }
   }
