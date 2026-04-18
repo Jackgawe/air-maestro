@@ -169,15 +169,17 @@ export function Orchestra({
   const processHand = useCallback((
     landmarks: NormalizedLandmark[],
     smoothedRef: React.MutableRefObject<{ x: number; y: number }>,
-    rect: DOMRect
+    rect: DOMRect,
+    vw: number,
+    vh: number
   ) => {
     const indexTip = landmarks[8];
     
     const rawCoords = mirrorAndNormalize(
-      indexTip.x * 640,
-      indexTip.y * 480,
-      640,
-      480
+      indexTip.x * vw,
+      indexTip.y * vh,
+      vw,
+      vh
     );
 
     smoothedRef.current = smoothCoordinates(
@@ -197,49 +199,69 @@ export function Orchestra({
 
   // MediaPipe results handler
   const handleResults = useCallback((results: HandLandmarkerResult) => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || !videoRef.current) return;
 
     const rect = containerRef.current.getBoundingClientRect();
     const now = performance.now();
+    const vw = videoRef.current.videoWidth || 640;
+    const vh = videoRef.current.videoHeight || 480;
 
-    let pointingHand: { present: boolean; x: number; y: number } | null = null;
+    let pointingHand: { present: boolean; x: number; y: number; isFist: boolean } | null = null;
     let conductingHand: { present: boolean; x: number; y: number; isPinching: boolean; isFist: boolean; velocity: number } | null = null;
 
-    if (results.landmarks.length >= 1) {
-      const hand1 = processHand(results.landmarks[0], smoothedPointingRef, rect);
-      pointingHand = {
-        present: true,
-        x: hand1.x,
-        y: hand1.y,
-      };
-      setPointingHandPos({ x: hand1.screenX, y: hand1.screenY });
+    if (results.landmarks.length > 0) {
+      // Sort hands by X coordinate to reliably assign Left/Right
+      const sortedIndices = results.landmarks
+        .map((_, i) => i)
+        .sort((a, b) => (1 - results.landmarks[a][8].x) - (1 - results.landmarks[b][8].x));
+
+      sortedIndices.forEach((resultIndex, sortIndex) => {
+        const landmarks = results.landmarks[resultIndex];
+        
+        let isLeftHand = false;
+        if (results.landmarks.length >= 2) {
+          isLeftHand = sortIndex === 0;
+        } else {
+          const rawX = 1 - landmarks[8].x;
+          isLeftHand = rawX < 0.5;
+        }
+
+        if (isLeftHand) {
+          const hand = processHand(landmarks, smoothedPointingRef, rect, vw, vh);
+          pointingHand = {
+            present: true,
+            x: hand.x,
+            y: hand.y,
+            isFist: hand.isFist,
+          };
+          setPointingHandPos({ x: hand.screenX, y: hand.screenY });
+        } else {
+          const hand = processHand(landmarks, smoothedConductingRef, rect, vw, vh);
+          
+          conductingVelocityTrackerRef.current?.addPosition(hand.screenX, hand.screenY, now);
+          const velocity = conductingVelocityTrackerRef.current?.velocity ?? 0;
+          
+          conductingHand = {
+            present: true,
+            x: hand.x,
+            y: hand.y,
+            isPinching: hand.isPinching,
+            isFist: hand.isFist,
+            velocity: velocity,
+          };
+          setConductingHandPos({ x: hand.screenX, y: hand.screenY });
+
+          const newBpm = sequencerRef.current?.getBpmFromY(hand.y) ?? 120;
+          sequencerRef.current?.setBpm(newBpm);
+          setInternalBpm(newBpm);
+          onBpmChange?.(newBpm);
+
+          sequencerRef.current?.setHandVelocity(velocity);
+        }
+      });
       setHandDetected(true);
     } else {
       setHandDetected(false);
-    }
-
-    if (results.landmarks.length >= 2) {
-      const hand2 = processHand(results.landmarks[1], smoothedConductingRef, rect);
-      
-      conductingVelocityTrackerRef.current?.addPosition(hand2.screenX, hand2.screenY, now);
-      const velocity = conductingVelocityTrackerRef.current?.velocity ?? 0;
-      
-      conductingHand = {
-        present: true,
-        x: hand2.x,
-        y: hand2.y,
-        isPinching: hand2.isPinching,
-        isFist: hand2.isFist,
-        velocity: velocity,
-      };
-      setConductingHandPos({ x: hand2.screenX, y: hand2.screenY });
-
-      const newBpm = sequencerRef.current?.getBpmFromY(hand2.y) ?? 120;
-      sequencerRef.current?.setBpm(newBpm);
-      setInternalBpm(newBpm);
-      onBpmChange?.(newBpm);
-
-      sequencerRef.current?.setHandVelocity(velocity);
     }
 
     gestureMachineRef.current?.update(pointingHand, conductingHand);
