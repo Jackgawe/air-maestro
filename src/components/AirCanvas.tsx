@@ -221,11 +221,30 @@ export function AirCanvas({ isActive }: AirCanvasProps) {
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="text-center">
             <h1 className="text-5xl font-bold text-amber-400 mb-4">Air Orchestra</h1>
-            <p className="text-gray-400 mb-8 max-w-md mx-auto">
+            <p className="text-gray-400 mb-4 max-w-md mx-auto">
               Conduct a virtual orchestra with your hand movements.
               Pinch to trigger downbeats, move vertically to control tempo.
             </p>
-            
+            <p className="text-gray-500 text-sm mb-8">
+              Made by{' '}
+              <a 
+                href="https://github.com/jackgawe" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-amber-400 hover:text-amber-300 underline"
+              >
+                @jackgawe
+              </a>
+              {' '}•{' '}
+              <a 
+                href="https://github.com/Jackgawe/air-maestro" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-amber-400 hover:text-amber-300 underline"
+              >
+                GitHub Repo
+              </a>
+            </p>
             <button
               onClick={handleStart}
               className="px-8 py-4 bg-amber-500 hover:bg-amber-600 text-gray-900 font-bold rounded-xl transition-colors text-lg"
